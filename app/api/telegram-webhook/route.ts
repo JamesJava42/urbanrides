@@ -1,55 +1,116 @@
 import { NextResponse } from 'next/server';
 
+// 1. Define your specific database URL
+const FIREBASE_DB_URL = "https://urbanride4244-default-rtdb.firebaseio.com";
+
 export async function POST(request: Request) {
   try {
+    // 2. Parse the incoming message from Telegram
     const update = await request.json();
 
-    // Check if someone clicked a button
+    // 3. Check if this is a Button Click (Callback Query)
     if (update.callback_query) {
-      const callbackQuery = update.callback_query;
-      const data = callbackQuery.data; // e.g. "accept_ride_123"
-      const chatId = callbackQuery.message.chat.id;
-      const messageId = callbackQuery.message.message_id;
-      const driverName = callbackQuery.from.first_name; 
+      const callback = update.callback_query;
+      const data = callback.data; // e.g., "accept_ride_123"
+      const chatId = callback.message.chat.id;
+      const messageId = callback.message.message_id;
+      
+      // Driver Info
+      const driverName = callback.from.first_name || "Unknown Driver";
+      const driverUsername = callback.from.username || ""; 
 
-      // 🔒 SECURE: Reading from Environment Variables
+      // Securely get the token
       const botToken = process.env.TELEGRAM_BOT_TOKEN;
+      if (!botToken) {
+        return NextResponse.json({ error: 'Missing Token' }, { status: 500 });
+      }
 
-      if (data.startsWith('accept_')) {
-        const rideId = data.replace('accept_', '');
-        
-        // 1. Update Firebase
-        // Note: We keep the URL hardcoded or use a variable if you prefer, 
-        // but the hardcoded URL is fine here as long as the ID matches your project.
-        const firebaseUrl = `https://urbanride4244-default-rtdb.firebaseio.com/rides/${rideId}.json`;
-        
-        await fetch(firebaseUrl, {
+      // 4. Split the data
+      const firstUnderscoreIndex = data.indexOf('_');
+      if (firstUnderscoreIndex === -1) return NextResponse.json({ status: 'ignored' });
+
+      const action = data.substring(0, firstUnderscoreIndex); 
+      const rideId = data.substring(firstUnderscoreIndex + 1); 
+
+      // 5. Logic Loop
+      let newStatus = "";
+      let responseText = "";
+      
+      // ✅ FIXED: Explicitly typed array for TypeScript
+      let nextButtons: { text: string; callback_data: string }[][] = []; 
+
+      // --- SCENARIO A: Driver Clicks ACCEPT ---
+      if (action === 'accept') {
+        newStatus = 'ACCEPTED';
+        responseText = `✅ *RIDE ACCEPTED*\n\nDriver: ${driverName} is on the way!`;
+
+        await fetch(`${FIREBASE_DB_URL}/rides/${rideId}.json`, {
           method: 'PATCH',
           body: JSON.stringify({ 
-            status: 'ACCEPTED',
-            driverName: driverName 
+            status: newStatus,
+            driverName: driverName,
+            driverUsername: driverUsername 
           })
         });
 
-        // 2. Update the Telegram Message (Remove button)
-        if (botToken) {
-          await fetch(`https://api.telegram.org/bot${botToken}/editMessageText`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              chat_id: chatId,
-              message_id: messageId,
-              text: `✅ *RIDE ACCEPTED*\n\nDriver: ${driverName} is on the way!`,
-              parse_mode: 'Markdown'
-            })
-          });
-        }
+        nextButtons = [[{ text: "🏁 Driver Arrived", callback_data: `arrived_${rideId}` }]];
       }
+
+      // --- SCENARIO B: Driver Clicks ARRIVED ---
+      else if (action === 'arrived') {
+        newStatus = 'ARRIVED';
+        responseText = `📍 *DRIVER ARRIVED*\n\nWaiting for passenger...`;
+
+        await fetch(`${FIREBASE_DB_URL}/rides/${rideId}.json`, {
+          method: 'PATCH',
+          body: JSON.stringify({ status: newStatus })
+        });
+
+        nextButtons = [[{ text: "✅ Complete Ride", callback_data: `complete_${rideId}` }]];
+      }
+
+      // --- SCENARIO C: Driver Clicks COMPLETE ---
+      else if (action === 'complete') {
+        newStatus = 'COMPLETED';
+        responseText = `🎉 *RIDE COMPLETED*\n\nGreat job, ${driverName}!`;
+
+        await fetch(`${FIREBASE_DB_URL}/rides/${rideId}.json`, {
+          method: 'PATCH',
+          body: JSON.stringify({ status: newStatus })
+        });
+
+        nextButtons = []; 
+      }
+
+      // 6. Update Telegram Message
+      if (newStatus) {
+        await fetch(`https://api.telegram.org/bot${botToken}/editMessageText`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            chat_id: chatId,
+            message_id: messageId,
+            text: responseText,
+            parse_mode: 'Markdown',
+            reply_markup: {
+              inline_keyboard: nextButtons
+            }
+          })
+        });
+      }
+
+      // 7. Stop loading spinner
+      await fetch(`https://api.telegram.org/bot${botToken}/answerCallbackQuery`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ callback_query_id: callback.id })
+      });
     }
 
     return NextResponse.json({ status: 'ok' });
+
   } catch (error) {
     console.error('Webhook Error:', error);
-    return NextResponse.json({ status: 'error' }, { status: 500 });
+    return NextResponse.json({ error: 'Internal Server Error' }, { status: 500 });
   }
 }
