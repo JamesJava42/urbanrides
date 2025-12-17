@@ -1,55 +1,71 @@
 import { NextResponse } from 'next/server';
+import { initializeApp } from "firebase/app";
+import { getDatabase, ref, set } from "firebase/database";
+
+const firebaseConfig = {
+  apiKey: process.env.NEXT_PUBLIC_FIREBASE_API_KEY,
+  authDomain: process.env.NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN,
+  projectId: process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID,
+  storageBucket: process.env.NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET,
+  messagingSenderId: process.env.NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID,
+  appId: process.env.NEXT_PUBLIC_FIREBASE_APP_ID,
+  databaseURL: "https://urbanride4244-default-rtdb.firebaseio.com/"
+};
+
+const app = initializeApp(firebaseConfig);
+const db = getDatabase(app);
+const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
+const GROUP_ID = process.env.TELEGRAM_GROUP_ID;
 
 export async function POST(request: Request) {
-  console.log("--- 🚀 API TRIGGERED: RIDE REQUEST ---");
-
   try {
     const body = await request.json();
-    const { pickup, destination, price, rideId } = body;
+    const { pickup, dropoff, phone, date, time, price } = body;
 
-    // 🔒 SECURE: Reading from Environment Variables (Vercel)
-    const botToken = process.env.TELEGRAM_BOT_TOKEN;
-    const chatId = process.env.TELEGRAM_CHAT_ID;
-
-    // Check if keys exist (Crucial for debugging deployment)
-    if (!botToken || !chatId) {
-      console.error("❌ ERROR: Missing API Keys in Environment Variables.");
-      return NextResponse.json({ success: false, error: "Missing Server Keys" }, { status: 500 });
+    // --- SPRINT 1 SAFETY CHECK ---
+    // If any required field is missing, stop immediately.
+    if (!pickup || !dropoff || !phone || !date || !time) {
+        return NextResponse.json({ success: false, error: "Missing fields" }, { status: 400 });
     }
 
-    // 1. Prepare Message
-    const text = `🚖 *NEW RIDE REQUEST*\n\n📍 *From:* ${pickup}\n🏁 *To:* ${destination}\n💰 *Price:* ${price}\n\n👇 Click below to Accept`;
+    const rideId = `ride_${Date.now()}`;
 
-    const keyboard = {
-      inline_keyboard: [[{ text: "✅ Accept Ride", callback_data: `accept_${rideId}` }]]
-    };
+    // 1. Save to Firebase
+    await set(ref(db, 'rides/' + rideId), {
+      rideId,
+      pickup,
+      dropoff,
+      phone,
+      date,
+      time,
+      price,
+      status: 'PENDING',
+      createdAt: Date.now()
+    });
 
-    // 2. Send to Telegram
-    const url = `https://api.telegram.org/bot${botToken}/sendMessage`;
-    
-    const res = await fetch(url, {
+    // 2. Send Telegram Card
+    // (Notice we use callback_data="accept_..." to link the ID)
+    const telegramMsg = `🚖 *NEW RIDE REQUEST*\n\n📍 *From:* ${pickup}\n🏁 *To:* ${dropoff}\n🕒 *Time:* ${time} (${date})\n💰 *Est. Price:* ${price}\n\n_Driver required!_`;
+
+    await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        chat_id: chatId,
-        text: text,
+        chat_id: GROUP_ID,
+        text: telegramMsg,
         parse_mode: 'Markdown',
-        reply_markup: keyboard
+        reply_markup: {
+          inline_keyboard: [
+            [{ text: "✅ ACCEPT RIDE", callback_data: `accept_${rideId}` }]
+          ]
+        }
       })
     });
 
-    const telegramData = await res.json();
-    
-    if (!res.ok) {
-      console.error("❌ TELEGRAM ERROR:", telegramData);
-      return NextResponse.json({ success: false, error: telegramData }, { status: 500 });
-    }
-
-    console.log("✅ Message Sent Successfully to Telegram!");
-    return NextResponse.json({ success: true });
+    return NextResponse.json({ success: true, rideId });
 
   } catch (error) {
-    console.error("❌ SERVER ERROR:", error);
-    return NextResponse.json({ success: false, error: 'Internal Server Error' }, { status: 500 });
+    console.error("API Error:", error);
+    return NextResponse.json({ success: false, error: "Server Error" }, { status: 500 });
   }
 }

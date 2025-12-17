@@ -17,28 +17,29 @@ const db = getDatabase(app);
 const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 
 export async function POST(request: Request) {
-  try {
-    const { rideId, message } = await request.json();
+    try {
+        const { rideId, message } = await request.json();
+        
+        // Get Driver ID from Ride Data
+        const snapshot = await get(ref(db, `rides/${rideId}`));
+        if (!snapshot.exists()) return NextResponse.json({ success: false });
+        
+        const ride = snapshot.val();
+        if (!ride.driverId) return NextResponse.json({ success: false, error: "No driver assigned" });
 
-    // 1. Get the ride details to find the Driver's ID
-    const snapshot = await get(ref(db, `rides/${rideId}`));
-    const ride = snapshot.val();
+        // Send to Telegram
+        await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({
+                chat_id: ride.driverId,
+                text: `💬 *Message from Passenger:*\n"${message}"`,
+                parse_mode: 'Markdown'
+            })
+        });
 
-    if (ride && ride.driverId) {
-      // 2. Forward the message to the Driver's Telegram
-      await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          chat_id: ride.driverId,
-          text: `💬 *Passenger says:*\n"${message}"`,
-          parse_mode: 'Markdown'
-        })
-      });
+        return NextResponse.json({ success: true });
+    } catch (error) {
+        return NextResponse.json({ success: false });
     }
-
-    return NextResponse.json({ success: true });
-  } catch (error) {
-    return NextResponse.json({ success: false });
-  }
 }

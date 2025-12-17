@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import { initializeApp } from "firebase/app";
 import { getDatabase, ref, update, get, push, query, orderByChild, equalTo } from "firebase/database";
 
-// --- FIREBASE CONFIG ---
+// --- CONFIG ---
 const firebaseConfig = {
   apiKey: process.env.NEXT_PUBLIC_FIREBASE_API_KEY,
   authDomain: process.env.NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN,
@@ -16,137 +16,205 @@ const firebaseConfig = {
 const app = initializeApp(firebaseConfig);
 const db = getDatabase(app);
 const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
-const ADMIN_ID = "8500104449"; 
+const ADMIN_ID = "8500104449"; // Admin ID for payment alerts
 
 export async function POST(request: Request) {
   try {
     const updateData = await request.json();
-    
-    // 1. BUTTON CLICKS (Accept, Arrived, Complete)
+
+    // ============================================================
+    // A. DRIVER VERIFICATION (Saving Phone Number)
+    // ============================================================
+    if (updateData.message && updateData.message.contact) {
+        const contact = updateData.message.contact;
+        const driverId = updateData.message.from.id;
+        
+        // Save Driver to Database
+        await update(ref(db, `drivers/${driverId}`), {
+            name: contact.first_name,
+            phone: contact.phone_number,
+            telegramId: driverId
+        });
+
+        // Confirm to Driver
+        await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({
+                chat_id: updateData.message.chat.id,
+                text: `✅ *Number Verified!*\n\nYou can now go back and click "ACCEPT" on the ride request.`
+            })
+        });
+        return NextResponse.json({ ok: true });
+    }
+
+    // ============================================================
+    // B. BUTTON CLICKS (The Main Logic)
+    // ============================================================
     if (updateData.callback_query) {
       const callback = updateData.callback_query;
       const data = callback.data; 
       const chatId = callback.message.chat.id;
       const messageId = callback.message.message_id;
-      const driverName = callback.from.first_name || "Driver";
-      const driverUsername = callback.from.username || "NoUsername";
+      const driverTelegramId = callback.from.id;
 
-      // --- HANDLE ACCEPT ---
+      // --- 1. ACCEPT RIDE ---
       if (data.startsWith('accept_')) {
-        // FIX: Use replace to get the full correct ID (e.g., "ride_123456")
         const rideId = data.replace('accept_', '');
         
-        console.log("Attempting to accept ride:", rideId); // Debug Log
-
-        // CRITICAL SAFETY CHECK
-        const snapshot = await get(ref(db, `rides/${rideId}`));
-        if (!snapshot.exists()) {
-             console.error(`❌ Ride ${rideId} not found in DB!`);
-             // Determine if we should alert the user or fail silently
-             return NextResponse.json({ ok: true }); 
-        }
-        const ride = snapshot.val();
+        // STEP 1: CHECK IF WE KNOW THIS DRIVER
+        const driverSnapshot = await get(ref(db, `drivers/${driverTelegramId}`));
         
-        // FIX: Correct Google Maps URL and Syntax
-        const encodedAddress = encodeURIComponent(ride.pickup || "Unknown Location");
+        // If driver is UNVERIFIED -> Stop them & Ask for Phone
+        if (!driverSnapshot.exists()) {
+             await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({
+                    chat_id: chatId, 
+                    text: `⚠ *Action Required*\n\nHey ${callback.from.first_name}, to accept rides, we need your phone number for the passenger.\n\nClick the button below to share it once.`,
+                    reply_markup: {
+                        keyboard: [[{ text: "📱 Share My Phone Number", request_contact: true }]],
+                        one_time_keyboard: true,
+                        resize_keyboard: true
+                    }
+                })
+             });
+             return NextResponse.json({ ok: true });
+        }
+
+        // STEP 2: CHECK THE LOCK (Sprint 3)
+        // Ensure the ride hasn't been taken by someone else in the last second
+        const rideSnapshot = await get(ref(db, `rides/${rideId}`));
+        if (!rideSnapshot.exists()) return NextResponse.json({ ok: true });
+        
+        const ride = rideSnapshot.val();
+
+        if (ride.status !== 'PENDING') {
+            // Ride is already taken
+            await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({
+                    chat_id: chatId,
+                    text: `⚠️ *TOO LATE!*\n\nAnother driver has already accepted this ride.`,
+                    parse_mode: 'Markdown'
+                })
+            });
+            // Ideally delete the button to stop others clicking
+            await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/deleteMessage`, {
+                 method: 'POST',
+                 headers: {'Content-Type': 'application/json'},
+                 body: JSON.stringify({ chat_id: chatId, message_id: messageId })
+            });
+            return NextResponse.json({ ok: true });
+        }
+
+        // STEP 3: ASSIGN THE DRIVER (Success)
+        const driverData = driverSnapshot.val();
+        const encodedAddress = encodeURIComponent(ride.pickup || "");
+        // Link logic can be improved later with lat/lng
         const mapLink = `https://www.google.com/maps/search/?api=1&query=${encodedAddress}`;
 
-        // 1. Update Firebase (This triggers the Frontend Change)
+        // Update Firebase (This triggers the Frontend change)
         await update(ref(db, `rides/${rideId}`), {
           status: 'ACCEPTED',
-          driverName: driverName,
-          driverUsername: driverUsername,
-          driverId: callback.from.id 
+          driverName: driverData.name,
+          driverPhone: driverData.phone, // Sending Verified Phone
+          driverId: driverTelegramId 
         });
 
-        // 2. Update Telegram Message (Driver Interface)
+        // Update Telegram Card (Show navigation buttons)
         await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/editMessageText`, {
           method: 'POST',
           headers: {'Content-Type': 'application/json'},
           body: JSON.stringify({
             chat_id: chatId,
             message_id: messageId,
-            text: `✅ *ACCEPTED by ${driverName}*\n\n📍 *Pickup:* ${ride.pickup}\n📞 *Phone:* ${ride.phone}\n💰 *Price:* ${ride.price}\n\n_Reply to chat with passenger._`,
+            text: `✅ *ACCEPTED by ${driverData.name}*\n\n📍 Pickup: ${ride.pickup}\n📞 Pax: ${ride.phone}\n💰 Price: ${ride.price}`,
             parse_mode: 'Markdown',
             reply_markup: {
               inline_keyboard: [
                 [{ text: "🧭 Open Google Maps", url: mapLink }],
-                [{ text: "📍 I HAVE ARRIVED", callback_data: `arrived_${rideId}` }]
+                [{ text: "📍 I HAVE ARRIVED", callback_data: `arrived_${rideId}` }],
+                [{ text: "❌ CANCEL RIDE", callback_data: `cancel_${rideId}` }]
               ]
             }
           })
         });
       }
 
-      // --- HANDLE ARRIVED ---
+      // --- 2. DRIVER ARRIVED ---
       else if (data.startsWith('arrived_')) {
         const rideId = data.replace('arrived_', '');
-        
         await update(ref(db, `rides/${rideId}`), { status: 'ARRIVED' });
-
         await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/editMessageReplyMarkup`, {
             method: 'POST',
             headers: {'Content-Type': 'application/json'},
             body: JSON.stringify({
               chat_id: chatId,
               message_id: messageId,
-              reply_markup: {
-                inline_keyboard: [
-                    [{ text: "🏁 COMPLETE RIDE", callback_data: `complete_${rideId}` }]
-                ]
-              }
+              reply_markup: { inline_keyboard: [[{ text: "🏁 COMPLETE RIDE", callback_data: `complete_${rideId}` }]] }
             })
         });
       }
 
-      // --- HANDLE COMPLETE ---
+      // --- 3. COMPLETE RIDE ---
       else if (data.startsWith('complete_')) {
         const rideId = data.replace('complete_', '');
-        
         await update(ref(db, `rides/${rideId}`), { status: 'COMPLETED' });
-
-        // Tell Driver
+        
+        // Notify Driver
         await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/editMessageText`, {
             method: 'POST',
             headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({
-              chat_id: chatId,
-              message_id: messageId,
-              text: `🏁 *RIDE COMPLETED*\n\nDriver: ${driverName}\nGood job!`,
-              parse_mode: 'Markdown'
-            })
+            body: JSON.stringify({ chat_id: chatId, message_id: messageId, text: `🏁 *RIDE COMPLETED*` })
         });
-
-        // Notify Admin
+        
+        // Notify Admin (You)
         await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
             method: 'POST',
             headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({ 
-                chat_id: ADMIN_ID, 
-                text: `💰 *PAYMENT ALERT*\n\nRide ID: ${rideId}\nDriver: ${driverName}\nStatus: COMPLETED` 
-            })
+            body: JSON.stringify({ chat_id: ADMIN_ID, text: `💰 MONEY: Ride ${rideId} Finished.` })
         });
+      }
+
+      // --- 4. CANCEL RIDE (By Driver) ---
+      else if (data.startsWith('cancel_')) {
+          const rideId = data.replace('cancel_', '');
+          await update(ref(db, `rides/${rideId}`), { status: 'CANCELLED' });
+          await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/editMessageText`, {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({ chat_id: chatId, message_id: messageId, text: `❌ RIDE CANCELLED by Driver` })
+          });
       }
     }
 
-    // 2. TEXT MESSAGES (Chat Bridge)
+    // ============================================================
+    // C. CHAT BRIDGE (Driver Text -> User Website)
+    // ============================================================
     else if (updateData.message && updateData.message.text) {
         const text = updateData.message.text;
         const driverId = updateData.message.from.id;
-
+        
+        // Ignore commands
         if (text.startsWith('/')) return NextResponse.json({ ok: true });
 
+        // Find the active ride for this driver
         const ridesRef = ref(db, 'rides');
         const q = query(ridesRef, orderByChild('driverId'), equalTo(driverId));
         const snapshot = await get(q);
 
         if (snapshot.exists()) {
             const rides = snapshot.val();
+            // Look for a ride that is ACTIVE (Accepted or Arrived)
             const activeRideId = Object.keys(rides).find(key => 
                 rides[key].status === 'ACCEPTED' || rides[key].status === 'ARRIVED'
             );
 
             if (activeRideId) {
+                // Push message to Firebase so Frontend sees it
                 await push(ref(db, `rides/${activeRideId}/messages`), {
                     sender: 'driver',
                     text: text,
