@@ -20,15 +20,15 @@ const GROUP_ID = process.env.TELEGRAM_GROUP_ID;
 export async function POST(request: Request) {
   try {
     const body = await request.json();
-    const { pickup, dropoff, phone, date, time, price } = body;
+    const { pickup, dropoff, phone, date, time } = body; // Removed 'price' from here
 
-    // --- SPRINT 1 SAFETY CHECK ---
-    // If any required field is missing, stop immediately.
+    // Safety Check
     if (!pickup || !dropoff || !phone || !date || !time) {
         return NextResponse.json({ success: false, error: "Missing fields" }, { status: 400 });
     }
 
     const rideId = `ride_${Date.now()}`;
+    const price = "$25.00"; // <--- FIXED: WE SET PRICE HERE
 
     // 1. Save to Firebase
     await set(ref(db, 'rides/' + rideId), {
@@ -38,14 +38,13 @@ export async function POST(request: Request) {
       phone,
       date,
       time,
-      price,
+      price, // Saves $25.00
       status: 'PENDING',
       createdAt: Date.now()
     });
 
     // 2. Send Telegram Card
-    // (Notice we use callback_data="accept_..." to link the ID)
-    const telegramMsg = `🚖 *NEW RIDE REQUEST*\n\n📍 *From:* ${pickup}\n🏁 *To:* ${dropoff}\n🕒 *Time:* ${time} (${date})\n💰 *Est. Price:* ${price}\n\n_Driver required!_`;
+    const telegramMsg = `🚖 *NEW RIDE REQUEST*\n\n📍 *From:* ${pickup}\n🏁 *To:* ${dropoff}\n🕒 *Time:* ${time} (${date})\n💰 *Price:* ${price}\n\n_Driver required!_`;
 
     await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
       method: 'POST',
