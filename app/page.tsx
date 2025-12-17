@@ -182,14 +182,18 @@ function BookingModule({ onSubmit, isLoading }: any) {
   );
 }
 
-// ==========================================
-// MODULE 2: RIDE STATUS & CHAT
+/// ==========================================
+// MODULE 2: RIDE STATUS & CHAT (Updated)
 // ==========================================
 function RideStatusModule({ rideId, onReset }: any) {
     const [status, setStatus] = useState('PENDING');
     const [driver, setDriver] = useState({ name: 'Finding Driver...', username: '' });
+    const [rideDetails, setRideDetails] = useState<any>(null);
     const [messages, setMessages] = useState<any[]>([]);
     const [input, setInput] = useState('');
+
+    // PAYMENT NUMBER (Change this to your real payment number)
+    const PAYMENT_NUMBER = "123-456-7890"; 
 
     useEffect(() => {
         const rideRef = ref(db, `rides/${rideId}`);
@@ -197,6 +201,7 @@ function RideStatusModule({ rideId, onReset }: any) {
             const data = snapshot.val();
             if(data) {
                 setStatus(data.status);
+                setRideDetails(data);
                 if(data.driverName) setDriver({ name: data.driverName, username: data.driverUsername });
                 if(data.messages) setMessages(Object.values(data.messages));
             }
@@ -210,32 +215,73 @@ function RideStatusModule({ rideId, onReset }: any) {
         setInput('');
     };
 
+    const cancelRide = async () => {
+        if(!confirm("Are you sure you want to cancel?")) return;
+        // 1. Update DB
+        await fetch('/api/cancel-ride', { 
+            method: 'POST', 
+            body: JSON.stringify({ rideId, reason: "User changed mind" }) 
+        });
+    };
+
+    // --- SCENARIO: RIDE COMPLETED (PAYMENT POP-UP) ---
     if(status === 'COMPLETED') {
         return (
-            <div className="text-center py-12 space-y-6 animate-in zoom-in">
-                <div className="w-24 h-24 bg-green-100 text-green-600 rounded-full flex items-center justify-center text-5xl mx-auto shadow-sm">✓</div>
-                <h2 className="text-3xl font-bold text-slate-800">Ride Completed</h2>
-                <p className="text-slate-500">Thank you for riding with us.</p>
-                <button onClick={onReset} className="w-full bg-indigo-900 text-white p-4 rounded-xl font-bold hover:bg-indigo-800 transition-colors">Book New Ride</button>
+            <div className="text-center py-8 space-y-6 animate-in zoom-in">
+                <div className="bg-green-100 p-6 rounded-3xl border border-green-200 shadow-xl">
+                    <div className="w-16 h-16 bg-green-500 text-white rounded-full flex items-center justify-center text-3xl mx-auto shadow-lg mb-4">✓</div>
+                    <h2 className="text-2xl font-black text-green-800 uppercase tracking-wide">Ride Finished</h2>
+                    
+                    <div className="my-6 bg-white p-4 rounded-xl border border-dashed border-green-300">
+                        <p className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-1">Total to Pay</p>
+                        <p className="text-4xl font-black text-slate-800">{rideDetails?.price || '$0.00'}</p>
+                    </div>
+
+                    <div className="space-y-2">
+                        <p className="text-sm font-bold text-green-700">PLEASE PAY TO:</p>
+                        <div className="text-xl font-mono font-bold text-slate-800 bg-white/50 py-2 rounded-lg select-all">
+                            {PAYMENT_NUMBER}
+                        </div>
+                    </div>
+                </div>
+                <button onClick={onReset} className="w-full bg-slate-900 text-white p-4 rounded-xl font-bold hover:bg-slate-800 transition-colors">
+                    Book New Ride
+                </button>
             </div>
         );
     }
 
+    // --- SCENARIO: CANCELLED (By Driver or User) ---
+    if(status === 'CANCELLED') {
+        return (
+            <div className="text-center py-12 space-y-6 animate-in zoom-in">
+                <div className="w-24 h-24 bg-red-100 text-red-600 rounded-full flex items-center justify-center text-5xl mx-auto">✕</div>
+                <h2 className="text-2xl font-bold text-slate-800">Ride Cancelled</h2>
+                <p className="text-slate-500">The ride was cancelled.</p>
+                <button onClick={onReset} className="w-full bg-slate-900 text-white p-4 rounded-xl font-bold">Try Again</button>
+            </div>
+        );
+    }
+
+    // --- SCENARIO: ACTIVE RIDE ---
     return (
         <div className="flex flex-col h-[550px] animate-in slide-in-from-bottom-4">
             {/* Status Header */}
             <div className={`p-5 text-center font-bold text-white rounded-t-2xl shadow-md transition-colors duration-500 ${status === 'ARRIVED' ? 'bg-amber-500' : status === 'ACCEPTED' ? 'bg-green-600' : 'bg-indigo-600'}`}>
                 {status === 'PENDING' ? 'SEARCHING FOR DRIVERS...' : 
-                 status === 'ACCEPTED' ? `✓ DRIVER FOUND: ${driver.name}` : 
+                 status === 'ACCEPTED' ? `✓ DRIVER: ${driver.name}` : 
                  '📍 DRIVER ARRIVED'}
             </div>
 
             {/* Chat Window */}
             <div className="flex-1 bg-slate-50 overflow-y-auto p-4 space-y-3 border-x border-slate-100">
                 {status === 'PENDING' && (
-                    <div className="flex flex-col items-center justify-center h-full space-y-4 opacity-50">
+                    <div className="flex flex-col items-center justify-center h-full space-y-6 opacity-50">
                         <div className="w-12 h-12 border-4 border-indigo-200 border-t-indigo-600 rounded-full animate-spin"></div>
-                        <p className="text-sm text-slate-500">Contacting nearby drivers...</p>
+                        <p className="text-sm text-slate-500">Contacting drivers...</p>
+                        <button onClick={cancelRide} className="text-xs font-bold text-red-400 border border-red-200 px-4 py-2 rounded-full hover:bg-red-50">
+                            Cancel Request
+                        </button>
                     </div>
                 )}
                 {messages.map((m, i) => (
@@ -250,21 +296,35 @@ function RideStatusModule({ rideId, onReset }: any) {
             {/* Input Area */}
             {(status === 'ACCEPTED' || status === 'ARRIVED') && (
                 <div className="p-4 bg-white border border-t-0 rounded-b-2xl space-y-3 shadow-lg">
+                    {/* Driver Contact Info */}
+                    <div className="flex justify-between items-center bg-indigo-50 p-3 rounded-xl border border-indigo-100">
+                         <div className="flex items-center gap-2">
+                             <div className="w-8 h-8 bg-indigo-200 rounded-full flex items-center justify-center text-indigo-700 font-bold">
+                                 {driver.name.charAt(0)}
+                             </div>
+                             <div className="text-xs">
+                                 <p className="font-bold text-indigo-900">{driver.name}</p>
+                                 <p className="text-indigo-400">Your Driver</p>
+                             </div>
+                         </div>
+                         {/* Link to Telegram Chat */}
+                         {driver.username && (
+                            <a href={`https://t.me/${driver.username}`} target="_blank" className="bg-white border border-indigo-200 text-indigo-600 px-3 py-2 rounded-lg text-xs font-bold hover:bg-indigo-600 hover:text-white transition-colors">
+                                Message 💬
+                            </a>
+                         )}
+                    </div>
+
                     <div className="flex gap-2">
-                        <input value={input} onChange={e=>setInput(e.target.value)} placeholder="Message driver..." className="flex-1 p-3 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-indigo-500 transition-all"/>
+                        <input value={input} onChange={e=>setInput(e.target.value)} placeholder="Type a message..." className="flex-1 p-3 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-indigo-500"/>
                         <button onClick={sendMsg} className="bg-indigo-600 text-white px-5 rounded-xl font-bold hover:bg-indigo-700">➢</button>
                     </div>
-                    {driver.username && (
-                        <a href={`https://t.me/${driver.username}`} target="_blank" className="block text-center text-xs font-bold text-indigo-500 hover:text-indigo-700 uppercase tracking-widest bg-indigo-50 p-2 rounded-lg">
-                            Open Telegram Chat
-                        </a>
-                    )}
+                    <button onClick={cancelRide} className="w-full text-[10px] font-bold text-red-300 hover:text-red-500 py-1">Cancel Ride</button>
                 </div>
             )}
         </div>
     );
 }
-
 // ==========================================
 // MAIN PAGE
 // ==========================================
