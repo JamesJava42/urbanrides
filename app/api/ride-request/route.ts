@@ -20,51 +20,40 @@ const GROUP_ID = process.env.TELEGRAM_GROUP_ID;
 export async function POST(request: Request) {
   try {
     const body = await request.json();
-    const { pickup, dropoff, phone, date, time } = body; // Removed 'price' from here
+    const { pickup, dropoff, pickupLat, pickupLng, phone, date, time } = body;
 
-    // Safety Check
-    if (!pickup || !dropoff || !phone || !date || !time) {
-        return NextResponse.json({ success: false, error: "Missing fields" }, { status: 400 });
-    }
+    if (!pickup || !dropoff) return NextResponse.json({ success: false }, { status: 400 });
 
     const rideId = `ride_${Date.now()}`;
-    const price = "$25.00"; // <--- FIXED: WE SET PRICE HERE
+    const price = "$25.00"; // Fixed price
 
-    // 1. Save to Firebase
+    // 1. Generate Link
+    // If coords exist (from AddressSearch), use them. Else use text.
+    let mapLink = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(pickup)}`;
+    if (pickupLat && pickupLng) {
+        mapLink = `https://www.google.com/maps/search/?api=1&query=${pickupLat},${pickupLng}`;
+    }
+
+    // 2. Save
     await set(ref(db, 'rides/' + rideId), {
-      rideId,
-      pickup,
-      dropoff,
-      phone,
-      date,
-      time,
-      price, // Saves $25.00
-      status: 'PENDING',
-      createdAt: Date.now()
+      rideId, pickup, dropoff, phone, date, time, price, status: 'PENDING',
+      pickupLat, pickupLng, createdAt: Date.now()
     });
 
-    // 2. Send Telegram Card
-    const telegramMsg = `🚖 *NEW RIDE REQUEST*\n\n📍 *From:* ${pickup}\n🏁 *To:* ${dropoff}\n🕒 *Time:* ${time} (${date})\n💰 *Price:* ${price}\n\n_Driver required!_`;
-
+    // 3. Alert
     await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         chat_id: GROUP_ID,
-        text: telegramMsg,
+        text: `🚖 *NEW RIDE*\n📍 ${pickup}\n🏁 ${dropoff}\n💰 ${price}`,
         parse_mode: 'Markdown',
-        reply_markup: {
-          inline_keyboard: [
-            [{ text: "✅ ACCEPT RIDE", callback_data: `accept_${rideId}` }]
-          ]
-        }
+        reply_markup: { inline_keyboard: [[{ text: "🧭 Open Map", url: mapLink }], [{ text: "✅ ACCEPT", callback_data: `accept_${rideId}` }]] }
       })
     });
 
     return NextResponse.json({ success: true, rideId });
-
   } catch (error) {
-    console.error("API Error:", error);
-    return NextResponse.json({ success: false, error: "Server Error" }, { status: 500 });
+    return NextResponse.json({ success: false }, { status: 500 });
   }
 }
