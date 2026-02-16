@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { initializeApp } from 'firebase/app';
 import { getDatabase, get, ref } from 'firebase/database';
 import { postSlackMessage } from '@/lib/notifications';
+import { hasTelegramBotToken, telegramApiRequest } from '@/lib/telegram';
 
 const firebaseConfig = {
   apiKey: process.env.NEXT_PUBLIC_FIREBASE_API_KEY,
@@ -15,7 +16,6 @@ const firebaseConfig = {
 
 const app = initializeApp(firebaseConfig);
 const db = getDatabase(app);
-const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 
 export async function POST(request: Request) {
   try {
@@ -37,17 +37,22 @@ export async function POST(request: Request) {
       return NextResponse.json({ success: true, warning: 'No driver assigned yet.' });
     }
 
-    if (BOT_TOKEN) {
-      await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          chat_id: ride.driverId,
-          text: `💬 *Message from Passenger:*\n"${message}"`,
-          parse_mode: 'Markdown',
-        }),
-      });
+    if (!hasTelegramBotToken()) {
+      await postSlackMessage(
+        [
+          '⚠️ *Missing Telegram Token*',
+          `• Ride ID: ${rideId}`,
+          `• Passenger message could not be delivered to driver ${ride.driverId}.`,
+        ].join('\n'),
+      );
+      return NextResponse.json({ success: true, warning: 'Telegram bot token not configured.' });
     }
+
+    await telegramApiRequest('sendMessage', {
+      chat_id: ride.driverId,
+      text: `💬 *Message from Passenger:*\n"${message}"`,
+      parse_mode: 'Markdown',
+    });
 
     return NextResponse.json({ success: true });
   } catch (error) {

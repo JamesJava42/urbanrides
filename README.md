@@ -62,6 +62,8 @@ ADMIN_DASHBOARD_KEY=
 
 # Optional Telegram bridge for direct driver chat
 TELEGRAM_BOT_TOKEN=
+# Optional: admin Telegram chat ID for completion alerts
+TELEGRAM_ADMIN_ID=
 ```
 
 ## Business rules
@@ -109,3 +111,13 @@ Optional but recommended:
 - `TELEGRAM_BOT_TOKEN`
 
 After editing env vars in Vercel, redeploy once so the server picks them up.
+
+
+### Quick Telegram key confirmation
+Use this in terminal (replace with your real bot token):
+
+```bash
+curl "https://api.telegram.org/bot<YOUR_TELEGRAM_BOT_TOKEN>/getMe"
+```
+
+If it returns `"ok": true`, your Telegram key is valid.
