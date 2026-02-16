@@ -25,8 +25,30 @@ const firebaseConfig = {
 const app = initializeApp(firebaseConfig);
 const db = getDatabase(app);
 
+
+const requiredFirebaseEnvVars = [
+  'NEXT_PUBLIC_FIREBASE_API_KEY',
+  'NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN',
+  'NEXT_PUBLIC_FIREBASE_PROJECT_ID',
+  'NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET',
+  'NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID',
+  'NEXT_PUBLIC_FIREBASE_APP_ID',
+] as const;
+
+function getMissingFirebaseEnvVars(): string[] {
+  return requiredFirebaseEnvVars.filter((key) => !process.env[key]);
+}
 export async function POST(request: Request) {
   try {
+    const missingFirebaseEnvVars = getMissingFirebaseEnvVars();
+    if (missingFirebaseEnvVars.length > 0) {
+      console.error('Missing Firebase env vars:', missingFirebaseEnvVars);
+      return NextResponse.json(
+        { success: false, error: 'Server configuration missing Firebase environment variables.' },
+        { status: 500 },
+      );
+    }
+
     const body = await request.json();
     const { pickup, dropoff, pickupLat, pickupLng, dropoffLat, dropoffLng, phone, email, date, time, riderMiles } = body;
 

@@ -89,3 +89,23 @@ npm run dev
 - Add auth for admin UI page itself (not just API key).
 - Add dead-letter handling for Slack/Telegram failures.
 - Add reconciliation job to flag rides stuck in `PENDING` too long.
+
+
+## If booking still shows "Internal Server Error" on Vercel
+
+Check these first in your Vercel Project → Settings → Environment Variables:
+
+- `NEXT_PUBLIC_FIREBASE_API_KEY`
+- `NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN`
+- `NEXT_PUBLIC_FIREBASE_PROJECT_ID`
+- `NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET`
+- `NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID`
+- `NEXT_PUBLIC_FIREBASE_APP_ID`
+
+Optional but recommended:
+- `SLACK_WEBHOOK_URL` (if invalid, booking now still succeeds, but Slack alert may fail)
+- `NEXT_PUBLIC_REGION_NAME`
+- `ADMIN_DASHBOARD_KEY`
+- `TELEGRAM_BOT_TOKEN`
+
+After editing env vars in Vercel, redeploy once so the server picks them up.
