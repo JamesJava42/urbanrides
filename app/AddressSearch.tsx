@@ -1,92 +1,96 @@
-"use client";
-import { useState, useEffect, useRef } from 'react';
+'use client';
 
-export default function AddressSearch({ label, onSelect }: any) {
-    const [query, setQuery] = useState('');
-    const [suggestions, setSuggestions] = useState<any[]>([]);
-    const [isOpen, setIsOpen] = useState(false);
-    
-    const wrapperRef = useRef<HTMLDivElement>(null);
+import { useEffect, useRef, useState } from 'react';
 
-    // Close dropdown if clicking outside
-    useEffect(() => {
-        function handleClickOutside(event: any) {
-            if (wrapperRef.current && !wrapperRef.current.contains(event.target)) {
-                setIsOpen(false);
-            }
-        }
-        document.addEventListener("mousedown", handleClickOutside);
-        return () => document.removeEventListener("mousedown", handleClickOutside);
-    }, [wrapperRef]);
+type AddressSelection = {
+  address: string;
+  lat: number | null;
+  lng: number | null;
+};
 
-    // LOGIC FIX: Enable button immediately when typing
-    const handleInput = (text: string) => {
-        setQuery(text);
-        // Send text immediately so validation passes
-        onSelect({ address: text, lat: null, lng: null }); 
-    };
+type NominatimResult = {
+  display_name: string;
+  lat: string;
+  lon: string;
+};
 
-    // API Search with delay
-    useEffect(() => {
-        const delayDebounceFn = setTimeout(async () => {
-            if (query.length > 2) {
-                try {
-                    const res = await fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${query}&limit=4`);
-                    const data = await res.json();
-                    setSuggestions(data);
-                    setIsOpen(true);
-                } catch (error) { console.error(error); }
-            } else {
-                setSuggestions([]);
-                setIsOpen(false);
-            }
-        }, 300);
-        return () => clearTimeout(delayDebounceFn);
-    }, [query]);
+export default function AddressSearch({ label, onSelect }: { label: string; onSelect: (value: AddressSelection) => void }) {
+  const [query, setQuery] = useState('');
+  const [suggestions, setSuggestions] = useState<NominatimResult[]>([]);
+  const [isOpen, setIsOpen] = useState(false);
+  const wrapperRef = useRef<HTMLDivElement>(null);
 
-    const handleSelect = (place: any) => {
-        const shortName = place.display_name.split(',')[0];
-        setQuery(shortName);
+  useEffect(() => {
+    function handleClickOutside(event: MouseEvent) {
+      if (wrapperRef.current && event.target instanceof Node && !wrapperRef.current.contains(event.target)) {
         setIsOpen(false);
-        // Send exact coordinates
-        onSelect({
-            address: place.display_name,
-            lat: place.lat,
-            lng: place.lon
-        });
-    };
+      }
+    }
 
-    return (
-        <div ref={wrapperRef} className="relative mb-5">
-            <label className="block text-xs font-black text-violet-600 uppercase tracking-widest mb-2 ml-1">{label}</label>
-            <div className="relative">
-                <input 
-                    placeholder="Search location..."
-                    className="w-full p-4 bg-white border-2 border-violet-100 rounded-2xl outline-none focus:border-fuchsia-500 focus:ring-4 focus:ring-fuchsia-500/20 transition-all font-bold text-slate-700 shadow-sm placeholder-slate-300"
-                    value={query}
-                    onChange={(e) => handleInput(e.target.value)}
-                    onFocus={() => query.length > 2 && setIsOpen(true)}
-                />
-                
-                {/* VIBRANT DROPDOWN */}
-                {isOpen && suggestions.length > 0 && (
-                    <ul className="absolute left-0 right-0 mt-2 bg-white rounded-2xl shadow-xl shadow-violet-500/20 border border-violet-50 overflow-hidden z-[100] animate-in slide-in-from-top-2">
-                        {suggestions.map((place, i) => (
-                            <li 
-                                key={i} 
-                                onClick={() => handleSelect(place)}
-                                className="p-4 hover:bg-gradient-to-r hover:from-violet-50 hover:to-fuchsia-50 cursor-pointer border-b border-slate-50 last:border-0 transition-colors flex items-center gap-3"
-                            >
-                                <span className="bg-violet-100 text-violet-600 w-8 h-8 rounded-full flex items-center justify-center text-xs">📍</span>
-                                <div>
-                                    <span className="font-bold text-slate-700 text-sm block">{place.display_name.split(',')[0]}</span>
-                                    <span className="text-[10px] text-slate-400 block truncate max-w-[220px]">{place.display_name}</span>
-                                </div>
-                            </li>
-                        ))}
-                    </ul>
-                )}
-            </div>
-        </div>
-    );
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
+
+  const handleInput = (text: string) => {
+    setQuery(text);
+    onSelect({ address: text, lat: null, lng: null });
+  };
+
+  useEffect(() => {
+    const timeout = setTimeout(async () => {
+      if (query.length < 3) {
+        setSuggestions([]);
+        setIsOpen(false);
+        return;
+      }
+
+      try {
+        const response = await fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${query}&limit=4`);
+        const data = (await response.json()) as NominatimResult[];
+        setSuggestions(data);
+        setIsOpen(true);
+      } catch (error) {
+        console.error(error);
+      }
+    }, 300);
+
+    return () => clearTimeout(timeout);
+  }, [query]);
+
+  const onSelectSuggestion = (place: NominatimResult) => {
+    setQuery(place.display_name.split(',')[0]);
+    setIsOpen(false);
+    onSelect({
+      address: place.display_name,
+      lat: Number(place.lat),
+      lng: Number(place.lon),
+    });
+  };
+
+  return (
+    <div ref={wrapperRef} className="relative">
+      <label className="mb-1 block text-sm font-medium text-slate-700">{label}</label>
+      <input
+        placeholder="Search location"
+        className="w-full rounded-xl border border-slate-300 p-3"
+        value={query}
+        onChange={(event) => handleInput(event.target.value)}
+        onFocus={() => query.length > 2 && setIsOpen(true)}
+      />
+
+      {isOpen && suggestions.length > 0 && (
+        <ul className="absolute z-20 mt-1 w-full overflow-hidden rounded-xl border border-slate-200 bg-white shadow-lg">
+          {suggestions.map((place) => (
+            <li
+              key={`${place.display_name}-${place.lat}-${place.lon}`}
+              onClick={() => onSelectSuggestion(place)}
+              className="cursor-pointer border-b border-slate-100 p-3 text-sm text-slate-700 last:border-b-0 hover:bg-slate-50"
+            >
+              {place.display_name}
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
 }

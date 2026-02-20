@@ -1,6 +1,8 @@
 import { NextResponse } from 'next/server';
-import { initializeApp } from "firebase/app";
-import { getDatabase, ref, get } from "firebase/database";
+import { initializeApp } from 'firebase/app';
+import { getDatabase, get, ref } from 'firebase/database';
+import { postSlackMessage } from '@/lib/notifications';
+import { hasTelegramBotToken, telegramApiRequest } from '@/lib/telegram';
 
 const firebaseConfig = {
   apiKey: process.env.NEXT_PUBLIC_FIREBASE_API_KEY,
@@ -9,37 +11,52 @@ const firebaseConfig = {
   storageBucket: process.env.NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET,
   messagingSenderId: process.env.NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID,
   appId: process.env.NEXT_PUBLIC_FIREBASE_APP_ID,
-  databaseURL: "https://urbanride4244-default-rtdb.firebaseio.com/"
+  databaseURL: 'https://urbanride4244-default-rtdb.firebaseio.com/',
 };
 
 const app = initializeApp(firebaseConfig);
 const db = getDatabase(app);
-const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 
 export async function POST(request: Request) {
-    try {
-        const { rideId, message } = await request.json();
-        
-        // Get Driver ID from Ride Data
-        const snapshot = await get(ref(db, `rides/${rideId}`));
-        if (!snapshot.exists()) return NextResponse.json({ success: false });
-        
-        const ride = snapshot.val();
-        if (!ride.driverId) return NextResponse.json({ success: false, error: "No driver assigned" });
+  try {
+    const { rideId, message } = await request.json();
 
-        // Send to Telegram
-        await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
-            method: 'POST',
-            headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({
-                chat_id: ride.driverId,
-                text: `💬 *Message from Passenger:*\n"${message}"`,
-                parse_mode: 'Markdown'
-            })
-        });
+    const snapshot = await get(ref(db, `rides/${rideId}`));
+    if (!snapshot.exists()) return NextResponse.json({ success: false, error: 'Ride not found.' }, { status: 404 });
 
-        return NextResponse.json({ success: true });
-    } catch (error) {
-        return NextResponse.json({ success: false });
+    const ride = snapshot.val();
+    if (!ride.driverId) {
+      await postSlackMessage(
+        [
+          '⚠️ *Passenger Message With No Driver Assigned*',
+          `• Ride ID: ${rideId}`,
+          `• Message: ${message}`,
+          `• Suggested action: mark as COMMUNICATION_FAILED or NO_DRIVER_AVAILABLE in /admin`,
+        ].join('\n'),
+      );
+      return NextResponse.json({ success: true, warning: 'No driver assigned yet.' });
     }
+
+    if (!hasTelegramBotToken()) {
+      await postSlackMessage(
+        [
+          '⚠️ *Missing Telegram Token*',
+          `• Ride ID: ${rideId}`,
+          `• Passenger message could not be delivered to driver ${ride.driverId}.`,
+        ].join('\n'),
+      );
+      return NextResponse.json({ success: true, warning: 'Telegram bot token not configured.' });
+    }
+
+    await telegramApiRequest('sendMessage', {
+      chat_id: ride.driverId,
+      text: `💬 *Message from Passenger:*\n"${message}"`,
+      parse_mode: 'Markdown',
+    });
+
+    return NextResponse.json({ success: true });
+  } catch (error) {
+    console.error('Send chat error:', error);
+    return NextResponse.json({ success: false, error: 'Unable to send message.' }, { status: 500 });
+  }
 }
